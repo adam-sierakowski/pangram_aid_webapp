@@ -12,7 +12,7 @@
     body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; color:var(--ink); background:var(--bg); }
     header { padding:16px; text-align:center; font-weight:600; letter-spacing:.2px; }
     .wrap { display:grid; gap:16px; padding:16px; max-width:960px; margin:0 auto; }
-    textarea { width:100%; min-height:30vh; padding:14px 16px; border-radius:16px; background:var(--card); color:var(--ink); border:1px solid #1f2430; outline:none; font-size:16px; resize:vertical; }
+    textarea { width:100%; min-height:auto; padding:14px 16px; border-radius:16px; background:var(--card); color:var(--ink); border:1px solid #1f2430; outline:none; font-size:16px; resize:none; overflow:hidden; }
     .panel { background:var(--card); border:1px solid #1f2430; border-radius:16px; padding:12px; }
     .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(56px,1fr)); gap:10px; }
     .cell { display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 8px; border-radius:12px; background:#0f1116; border:1px solid #1f2430; }
@@ -44,11 +44,11 @@
     </section>
 
     <section class="panel">
-      <div class="hint">Missing letters (original order):</div>
-      <div class="rem" id="remainOriginal"></div>
-
       <div class="hint">Missing letters (shuffled on load):</div>
       <div class="rem" id="remainShuffled"></div>
+
+      <div class="hint">Missing letters (original order):</div>
+      <div class="rem" id="remainOriginal"></div>
 
       <div class="hint" style="margin-top:1rem;">Per-letter counts:</div>
       <div class="grid" id="grid" aria-live="polite" aria-relevant="all"></div>
@@ -164,6 +164,10 @@
     }
 
     $text.addEventListener('input', updateCounts);
+    $text.addEventListener('input', () => {
+      $text.style.height = 'auto';
+      $text.style.height = $text.scrollHeight + 'px';
+    });
     loadConfig();
 
     if ('serviceWorker' in navigator) {
