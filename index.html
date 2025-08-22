@@ -1,0 +1,162 @@
+<!-- index.html (secure) -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Pangram Aid</title>
+  <!-- Strict CSP; allows this inline script, same-origin fetches, and worker -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; connect-src 'self'; img-src 'self' data:; upgrade-insecure-requests">
+  <style>
+    :root { --ok:#22c55e; --bad:#ef4444; --zero:#9ca3af; --bg:#0b0c0f; --card:#111318; --ink:#e5e7eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; color:var(--ink); background:var(--bg); }
+    header { padding:16px; text-align:center; font-weight:600; letter-spacing:.2px; }
+    .wrap { display:grid; gap:16px; padding:16px; max-width:960px; margin:0 auto; }
+    textarea { width:100%; min-height:30vh; padding:14px 16px; border-radius:16px; background:var(--card); color:var(--ink); border:1px solid #1f2430; outline:none; font-size:16px; resize:vertical; }
+    .panel { background:var(--card); border:1px solid #1f2430; border-radius:16px; padding:12px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(56px,1fr)); gap:10px; }
+    .cell { display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 8px; border-radius:12px; background:#0f1116; border:1px solid #1f2430; }
+    .ltr { font-weight:700; font-variant-ligatures:none; }
+    .cnt { font-weight:700; padding:.25rem .6rem; border-radius:999px; line-height:1; border:1px solid #1f2430; }
+    .zero { color:var(--zero); }
+    .one { color:var(--ok); }
+    .many { color:var(--bad); }
+    .totals { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:10px; font-size:14px; opacity:.9; }
+    .muted { color:#a3a3a3; }
+    .hint { font-size:12px; color:#9aa3b2; }
+    footer { padding:12px 16px; text-align:center; font-size:12px; color:#9aa3b2; }
+    .badge { font-weight:700; padding:.3rem .6rem; border-radius:999px; border:1px solid #1f2430; background:#0f1116; }
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  </style>
+</head>
+<body>
+  <header>Pangram Aid</header>
+  <main class="wrap">
+    <section class="panel">
+      <label class="sr-only" for="text">Type your pangram</label>
+      <textarea id="text" placeholder="Type here… Every letter exactly once for a perfect pangram."></textarea>
+      <div class="totals">
+        <div><span class="badge" id="lettersTotal">0</span> letters total</div>
+        <div class="muted">Config alphabet + locale • green=1, red=>1, gray=0</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="hint" id="alphaLabel">Alphabet:</div>
+      <div class="grid" id="grid" aria-live="polite" aria-relevant="all"></div>
+    </section>
+  </main>
+
+  <footer>
+    Edit <code>config.json</code> to change the letters and locale.
+  </footer>
+
+  <script>
+    // ---- Security notes (in-code):
+    // - No innerHTML is used for untrusted data; only textContent.
+    // - Letters from config are deduplicated and whitespace-stripped.
+    // - Strict CSP above; no remote scripts; no eval.
+    // - SW is separate (sw.js) with versioned cache and network-first for config.json.
+
+    const DEFAULT_CFG = {
+      letters: "aąbcćdeęfghijklłmnńoóprsśtuwyzźż",
+      locale: "pl-PL"
+    };
+
+    const $text = document.getElementById('text');
+    const $grid = document.getElementById('grid');
+    const $tot  = document.getElementById('lettersTotal');
+    const $alphaLabel = document.getElementById('alphaLabel');
+
+    let letters = Array.from(DEFAULT_CFG.letters);
+    let locale  = DEFAULT_CFG.locale;
+
+    // Sanitize letters from config: remove whitespace, keep unique code points, preserve order.
+    function sanitizeLetters(raw) {
+      const seen = new Set();
+      const out = [];
+      for (const cp of Array.from(String(raw).replace(/\s+/g,''))) {
+        if (!seen.has(cp)) { seen.add(cp); out.push(cp); }
+      }
+      return out.length ? out : Array.from(DEFAULT_CFG.letters);
+    }
+
+    // Build UI grid safely (no innerHTML).
+    function buildGrid() {
+      $grid.textContent = '';
+      for (const ch of letters) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.setAttribute('role','group');
+        cell.setAttribute('aria-label', `Letter ${ch}`);
+        cell.dataset.letter = ch;
+
+        const l = document.createElement('div');
+        l.className = 'ltr';
+        l.textContent = ch;
+
+        const c = document.createElement('div');
+        c.className = 'cnt zero';
+        c.setAttribute('data-count','');
+        c.textContent = '0';
+
+        cell.append(l, c);
+        $grid.appendChild(cell);
+      }
+      $alphaLabel.textContent = `Alphabet (${letters.length}): ${letters.join('')}`;
+      updateCounts(); // initial paint
+    }
+
+    // Count occurrences and colorize.
+    function updateCounts() {
+      const txt = ($text.value || '').toLocaleLowerCase(locale);
+      const totalLetters = (txt.match(/\p{L}/gu) || []).length; // Unicode letters count
+      $tot.textContent = String(totalLetters);
+
+      const freq = Object.fromEntries(letters.map(l => [l, 0]));
+      for (const ch of txt) if (Object.prototype.hasOwnProperty.call(freq, ch)) freq[ch]++;
+
+      for (const cell of $grid.children) {
+        const ltr = cell.dataset.letter;
+        const n = freq[ltr] ?? 0;
+        const c = cell.querySelector('[data-count]');
+        c.textContent = String(n);
+        c.classList.remove('zero','one','many');
+        c.classList.add(n===0?'zero':n===1?'one':'many');
+        cell.title = `${ltr}: ${n}`;
+      }
+    }
+
+    // Load config.json with network-first (fresh letters/locale), safe fallbacks.
+    async function loadConfig() {
+      try {
+        const res = await fetch('config.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('bad status');
+        const cfg = await res.json();
+        letters = sanitizeLetters(cfg.letters ?? DEFAULT_CFG.letters);
+        locale  = String(cfg.locale || DEFAULT_CFG.locale);
+      } catch (_) {
+        letters = sanitizeLetters(DEFAULT_CFG.letters);
+        locale  = DEFAULT_CFG.locale;
+      } finally {
+        buildGrid();
+      }
+    }
+
+    // Events.
+    $text.addEventListener('input', updateCounts);
+
+    // Init.
+    loadConfig();
+
+    // Register SW (separate file; safer for CSP).
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(()=>{});
+      });
+    }
+  </script>
+</body>
+</html>
