@@ -1,11 +1,9 @@
-<!-- index.html (secure) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Pangram Aid</title>
-  <!-- Strict CSP; allows this inline script, same-origin fetches, and worker -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; connect-src 'self'; img-src 'self' data:; upgrade-insecure-requests">
   <style>
@@ -24,11 +22,11 @@
     .one { color:var(--ok); }
     .many { color:var(--bad); }
     .totals { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:10px; font-size:14px; opacity:.9; }
-    .muted { color:#a3a3a3; }
-    .hint { font-size:12px; color:#9aa3b2; }
     footer { padding:12px 16px; text-align:center; font-size:12px; color:#9aa3b2; }
     .badge { font-weight:700; padding:.3rem .6rem; border-radius:999px; border:1px solid #1f2430; background:#0f1116; }
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .rem { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:.5rem .75rem; border-radius:10px; background:#0f1116; border:1px solid #1f2430; }
+    .hint { font-size:12px; color:#9aa3b2; margin-top:.5rem; margin-bottom:.25rem; }
   </style>
 </head>
 <body>
@@ -38,13 +36,21 @@
       <label class="sr-only" for="text">Type your pangram</label>
       <textarea id="text" placeholder="Type here… Every letter exactly once for a perfect pangram."></textarea>
       <div class="totals">
-        <div><span class="badge" id="lettersTotal">0</span> letters total</div>
-        <div class="muted">Config alphabet + locale • green=1, red=>1, gray=0</div>
+        <div>
+          <span class="badge" id="lettersTotal">0</span>
+          letters total (<span id="alphabetSize">0</span> in the alphabet)
+        </div>
       </div>
     </section>
 
     <section class="panel">
-      <div class="hint" id="alphaLabel">Alphabet:</div>
+      <div class="hint">Missing letters (original order):</div>
+      <div class="rem" id="remainOriginal"></div>
+
+      <div class="hint">Missing letters (shuffled on load):</div>
+      <div class="rem" id="remainShuffled"></div>
+
+      <div class="hint" style="margin-top:1rem;">Per-letter counts:</div>
       <div class="grid" id="grid" aria-live="polite" aria-relevant="all"></div>
     </section>
   </main>
@@ -54,11 +60,7 @@
   </footer>
 
   <script>
-    // ---- Security notes (in-code):
-    // - No innerHTML is used for untrusted data; only textContent.
-    // - Letters from config are deduplicated and whitespace-stripped.
-    // - Strict CSP above; no remote scripts; no eval.
-    // - SW is separate (sw.js) with versioned cache and network-first for config.json.
+    // Security: no innerHTML for untrusted data; strict CSP; separate SW file.
 
     const DEFAULT_CFG = {
       letters: "aąbcćdeęfghijklłmnńoóprsśtuwyzźż",
@@ -68,12 +70,14 @@
     const $text = document.getElementById('text');
     const $grid = document.getElementById('grid');
     const $tot  = document.getElementById('lettersTotal');
-    const $alphaLabel = document.getElementById('alphaLabel');
+    const $alphaSize = document.getElementById('alphabetSize');
+    const $remainOriginal = document.getElementById('remainOriginal');
+    const $remainShuffled = document.getElementById('remainShuffled');
 
     let letters = Array.from(DEFAULT_CFG.letters);
+    let shuffledLetters = [];
     let locale  = DEFAULT_CFG.locale;
 
-    // Sanitize letters from config: remove whitespace, keep unique code points, preserve order.
     function sanitizeLetters(raw) {
       const seen = new Set();
       const out = [];
@@ -83,7 +87,15 @@
       return out.length ? out : Array.from(DEFAULT_CFG.letters);
     }
 
-    // Build UI grid safely (no innerHTML).
+    function shuffle(arr) {
+      const a = arr.slice();
+      for (let i=a.length-1;i>0;i--) {
+        const j = Math.floor(Math.random()*(i+1));
+        [a[i],a[j]]=[a[j],a[i]];
+      }
+      return a;
+    }
+
     function buildGrid() {
       $grid.textContent = '';
       for (const ch of letters) {
@@ -105,19 +117,20 @@
         cell.append(l, c);
         $grid.appendChild(cell);
       }
-      $alphaLabel.textContent = `Alphabet (${letters.length}): ${letters.join('')}`;
-      updateCounts(); // initial paint
+      $alphaSize.textContent = String(letters.length);
+      shuffledLetters = shuffle(letters);
+      updateCounts();
     }
 
-    // Count occurrences and colorize.
     function updateCounts() {
       const txt = ($text.value || '').toLocaleLowerCase(locale);
-      const totalLetters = (txt.match(/\p{L}/gu) || []).length; // Unicode letters count
+      const totalLetters = (txt.match(/\p{L}/gu) || []).length;
       $tot.textContent = String(totalLetters);
 
       const freq = Object.fromEntries(letters.map(l => [l, 0]));
       for (const ch of txt) if (Object.prototype.hasOwnProperty.call(freq, ch)) freq[ch]++;
 
+      // Update per-letter grid
       for (const cell of $grid.children) {
         const ltr = cell.dataset.letter;
         const n = freq[ltr] ?? 0;
@@ -127,9 +140,14 @@
         c.classList.add(n===0?'zero':n===1?'one':'many');
         cell.title = `${ltr}: ${n}`;
       }
+
+      // Dynamic remaining strings
+      const remainingOriginal = letters.filter(l => (freq[l]||0)===0).join('');
+      const remainingShuf = shuffledLetters.filter(l => (freq[l]||0)===0).join('');
+      $remainOriginal.textContent = remainingOriginal;
+      $remainShuffled.textContent = remainingShuf;
     }
 
-    // Load config.json with network-first (fresh letters/locale), safe fallbacks.
     async function loadConfig() {
       try {
         const res = await fetch('config.json', { cache: 'no-store' });
@@ -137,7 +155,7 @@
         const cfg = await res.json();
         letters = sanitizeLetters(cfg.letters ?? DEFAULT_CFG.letters);
         locale  = String(cfg.locale || DEFAULT_CFG.locale);
-      } catch (_) {
+      } catch {
         letters = sanitizeLetters(DEFAULT_CFG.letters);
         locale  = DEFAULT_CFG.locale;
       } finally {
@@ -145,13 +163,9 @@
       }
     }
 
-    // Events.
     $text.addEventListener('input', updateCounts);
-
-    // Init.
     loadConfig();
 
-    // Register SW (separate file; safer for CSP).
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').catch(()=>{});
