@@ -1,7 +1,6 @@
-// sw.js
-/* Minimal offline support with cache versioning and safe defaults */
-const CACHE_VER = 'pangram-aid-v3';
-const CORE_ASSETS = ['/', './', './index.html', './config.json'];
+/* Offline support with cache versioning and safe defaults */
+const CACHE_VER = 'pangram-aid-v4';
+const CORE_ASSETS = ['/', './', './index.html', './config.json', './sw.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
@@ -21,36 +20,45 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const { request } = e;
+  const url = new URL(request.url);
 
-  // Network-first for config.json to avoid stale alphabet; cache-first otherwise.
-  if (new URL(request.url).pathname.endsWith('/config.json')) {
+  // Only handle same-origin requests to avoid caching 3rd-party unintentionally
+  if (url.origin !== location.origin) return;
+
+  // Network-first for config.json to avoid stale alphabet/locale
+  if (url.pathname.endsWith('/config.json')) {
     e.respondWith((async () => {
       try {
-        const fresh = await fetch(request);
+        const fresh = await fetch(request, { cache: 'no-store' });
         const cache = await caches.open(CACHE_VER);
         cache.put(request, fresh.clone());
         return fresh;
       } catch {
         const cached = await caches.match(request);
-        return cached || new Response('{"letters":"","locale":"pl-PL"}', { headers: { 'Content-Type':'application/json' }});
+        return cached || new Response('{"letters":"","locale":"pl-PL"}', {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
       }
     })());
     return;
   }
 
+  // Cache-first for everything else (HTML, SW, assets)
   e.respondWith((async () => {
-    const cached = await caches.match(request);
+    const cached = await caches.match(request, { ignoreSearch: true });
     if (cached) return cached;
     try {
       const net = await fetch(request);
       const cache = await caches.open(CACHE_VER);
-      // Only cache GET same-origin.
-      if (request.method === 'GET' && new URL(request.url).origin === location.origin) {
-        cache.put(request, net.clone());
-      }
+      if (request.method === 'GET') cache.put(request, net.clone());
       return net;
     } catch {
-      return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
+      // Fallback to cached root for navigation requests
+      if (request.mode === 'navigate') {
+        const offline = await caches.match('./index.html');
+        if (offline) return offline;
+      }
+      return new Response('Offline', { status: 503, statusText: 'Offline' });
     }
   })());
 });

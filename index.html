@@ -1,3 +1,4 @@
+<!-- index.html (secure, working counters + shuffle) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -12,7 +13,7 @@
     body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; color:var(--ink); background:var(--bg); }
     header { padding:16px; text-align:center; font-weight:600; letter-spacing:.2px; }
     .wrap { display:grid; gap:16px; padding:16px; max-width:960px; margin:0 auto; }
-    textarea { width:100%; min-height:auto; padding:14px 16px; border-radius:16px; background:var(--card); color:var(--ink); border:1px solid #1f2430; outline:none; font-size:16px; resize:none; overflow:hidden; }
+    textarea { width:100%; padding:14px 16px; border-radius:16px; background:var(--card); color:var(--ink); border:1px solid #1f2430; outline:none; font-size:16px; resize:none; overflow:hidden; min-height:10vh; }
     .panel { background:var(--card); border:1px solid #1f2430; border-radius:16px; padding:12px; }
     .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(56px,1fr)); gap:10px; }
     .cell { display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 8px; border-radius:12px; background:#0f1116; border:1px solid #1f2430; }
@@ -26,7 +27,10 @@
     .badge { font-weight:700; padding:.3rem .6rem; border-radius:999px; border:1px solid #1f2430; background:#0f1116; }
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     .rem { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:.5rem .75rem; border-radius:10px; background:#0f1116; border:1px solid #1f2430; }
-    .hint { font-size:12px; color:#9aa3b2; margin-top:.5rem; margin-bottom:.25rem; }
+    .hint { font-size:12px; color:#9aa3b2; margin-top:.5rem; margin-bottom:.25rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+    .chip { font-variant-numeric:tabular-nums; padding:.15rem .45rem; border-radius:999px; border:1px solid #1f2430; background:#0f1116; }
+    button { cursor:pointer; border-radius:10px; border:1px solid #1f2430; background:#0f1116; color:var(--ink); padding:.3rem .6rem; }
+    button:active{transform:translateY(1px)}
   </style>
 </head>
 <body>
@@ -44,11 +48,18 @@
     </section>
 
     <section class="panel">
-      <div class="hint">Missing letters (shuffled on load):</div>
-      <div class="rem" id="remainShuffled"></div>
-
-      <div class="hint">Missing letters (original order):</div>
+      <div class="hint">
+        Missing letters (original order):
+        <span class="chip" id="remainOriginalCount">0</span>
+      </div>
       <div class="rem" id="remainOriginal"></div>
+
+      <div class="hint">
+        Missing letters (shuffled):
+        <span class="chip" id="remainShuffledCount">0</span>
+        <button id="reshuffleBtn" type="button" aria-label="Reshuffle alphabet">Shuffle</button>
+      </div>
+      <div class="rem" id="remainShuffled"></div>
 
       <div class="hint" style="margin-top:1rem;">Per-letter counts:</div>
       <div class="grid" id="grid" aria-live="polite" aria-relevant="all"></div>
@@ -73,10 +84,16 @@
     const $alphaSize = document.getElementById('alphabetSize');
     const $remainOriginal = document.getElementById('remainOriginal');
     const $remainShuffled = document.getElementById('remainShuffled');
+    const $remainOriginalCount = document.getElementById('remainOriginalCount');
+    const $remainShuffledCount = document.getElementById('remainShuffledCount');
+    const $reshuffleBtn = document.getElementById('reshuffleBtn');
 
     let letters = Array.from(DEFAULT_CFG.letters);
     let shuffledLetters = [];
     let locale  = DEFAULT_CFG.locale;
+
+    // Auto-grow textarea height with content
+    function autoGrow() { $text.style.height='auto'; $text.style.height=$text.scrollHeight+'px'; }
 
     function sanitizeLetters(raw) {
       const seen = new Set();
@@ -118,8 +135,8 @@
         $grid.appendChild(cell);
       }
       $alphaSize.textContent = String(letters.length);
-      shuffledLetters = shuffle(letters);
-      updateCounts();
+      shuffledLetters = shuffle(letters); // initial shuffle on load
+      updateCounts(); // initial paint, also updates remaining counters
     }
 
     function updateCounts() {
@@ -141,11 +158,14 @@
         cell.title = `${ltr}: ${n}`;
       }
 
-      // Dynamic remaining strings
+      // Dynamic remaining strings + their counts
       const remainingOriginal = letters.filter(l => (freq[l]||0)===0).join('');
       const remainingShuf = shuffledLetters.filter(l => (freq[l]||0)===0).join('');
+
       $remainOriginal.textContent = remainingOriginal;
       $remainShuffled.textContent = remainingShuf;
+      $remainOriginalCount.textContent = String(remainingOriginal.length);
+      $remainShuffledCount.textContent = String(remainingShuf.length);
     }
 
     async function loadConfig() {
@@ -163,13 +183,21 @@
       }
     }
 
-    $text.addEventListener('input', updateCounts);
-    $text.addEventListener('input', () => {
-      $text.style.height = 'auto';
-      $text.style.height = $text.scrollHeight + 'px';
-    });
-    loadConfig();
+    // Wire events once
+    $text.addEventListener('input', () => { autoGrow(); updateCounts(); });
+    if ($reshuffleBtn) {
+      $reshuffleBtn.addEventListener('click', () => {
+        shuffledLetters = shuffle(letters); // reshuffle source alphabet
+        updateCounts(); // repaint remaining + counts
+      });
+    }
 
+    // Init
+    loadConfig();
+    // First autosize
+    window.addEventListener('load', autoGrow);
+
+    // SW
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').catch(()=>{});
