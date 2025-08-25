@@ -2,7 +2,6 @@
   "alphabet": "aąbcćdeęfghijklłmnńoóprsśtuwyzźż",
   "maxPop": 19,
   "files": {
-    "1": "../res/dict/pl_PL/pop-1.jsonl",
     "3": "../res/dict/pl_PL/pop-3.jsonl",
     "5": "../res/dict/pl_PL/pop-5.jsonl",
     "6": "../res/dict/pl_PL/pop-6.jsonl",
@@ -24,6 +23,6 @@
   },
   "count": {
     "total_lines_read": 6056612,
-    "kept_unique_letter_words": 845488
+    "kept_unique_letter_words": 681616
   }
 }
