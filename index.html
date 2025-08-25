@@ -1,8 +1,7 @@
-<!-- index.html (secure, working counters + shuffle) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Pangram Aid</title>
   <meta http-equiv="Content-Security-Policy"
@@ -29,8 +28,25 @@
     .rem { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:.5rem .75rem; border-radius:10px; background:#0f1116; border:1px solid #1f2430; }
     .hint { font-size:12px; color:#9aa3b2; margin-top:.5rem; margin-bottom:.25rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
     .chip { font-variant-numeric:tabular-nums; padding:.15rem .45rem; border-radius:999px; border:1px solid #1f2430; background:#0f1116; }
-    button { cursor:pointer; border-radius:10px; border:1px solid #1f2430; background:#0f1116; color:var(--ink); padding:.3rem .6rem; }
+    button { cursor:pointer; border-radius:10px; border:1px solid #1f2430; background:#0f1116; color:var(--ink); padding:.35rem .7rem; }
     button:active{transform:translateY(1px)}
+    .btn-ghost{background:transparent;border-color:#2a3240}
+    /* Drawer */
+    .drawer { position:fixed; inset:0; pointer-events:none; }
+    .drawer .backdrop { position:absolute; inset:0; background:#0008; opacity:0; transition:opacity .2s; }
+    .drawer .panel { position:absolute; top:0; right:0; height:100%; width:min(92vw,420px); background:#0e1117; border-left:1px solid #1f2430; transform:translateX(100%); transition:transform .25s; display:flex; flex-direction:column; }
+    .drawer.open { pointer-events:auto; }
+    .drawer.open .backdrop { opacity:1; }
+    .drawer.open .panel { transform:none; }
+    .side-hdr { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid #1f2430; }
+    .side-body { padding:12px 14px; display:flex; flex-direction:column; gap:12px; overflow:auto; }
+    .tog { display:flex; align-items:center; gap:8px; }
+    .results { display:flex; flex-direction:column; gap:8px; }
+    .list { display:grid; gap:6px; }
+    .word { padding:.35rem .55rem; border:1px solid #1f2430; border-radius:10px; background:#0f1116; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .small { font-size:12px; color:#9aa3b2; }
+    .textfield { width:100%; padding:.5rem .7rem; border-radius:10px; border:1px solid #2a3240; background:#0f1116; color:var(--ink); }
   </style>
 </head>
 <body>
@@ -58,6 +74,7 @@
         Missing letters (shuffled):
         <span class="chip" id="remainShuffledCount">0</span>
         <button id="reshuffleBtn" type="button" aria-label="Reshuffle alphabet">Shuffle</button>
+        <button id="openFinder" type="button" class="btn-ghost" aria-label="Find words with remaining letters">Find words with these</button>
       </div>
       <div class="rem" id="remainShuffled"></div>
 
@@ -67,17 +84,51 @@
   </main>
 
   <footer>
-    Edit <code>config.json</code> to change the letters and locale.
+    Uses local dictionary at <code>res/dict/(locale_name)</code>. Edit <code>config.json</code> to change alphabet/locale.
   </footer>
 
+  <!-- Drawer -->
+  <div id="drawer" class="drawer" aria-hidden="true">
+    <div class="backdrop" id="drawerBackdrop"></div>
+    <aside class="panel">
+      <div class="side-hdr">
+        <strong>Word Finder</strong>
+        <button id="drawerClose" type="button">Close</button>
+      </div>
+      <div class="side-body">
+        <label for="lettersInput" class="small">Letters to use (pre-filled with shuffled missing):</label>
+        <input id="lettersInput" class="textfield" inputmode="latin" autocomplete="off" spellcheck="false" />
+
+        <div class="tog">
+          <label><input type="radio" name="mode" value="subset"/> Use only some of these</label>
+        </div>
+        <div class="tog">
+          <label><input type="radio" name="mode" value="exact" checked/> Use exactly these letters</label>
+        </div>
+        <div class="tog">
+          <label><input type="checkbox" id="shuffleToggle" checked/> Shuffle results</label>
+        </div>
+        <div class="row">
+          <button id="goBtn" type="button">Go!</button>
+          <span id="status" class="small">Idle</span>
+        </div>
+
+        <div class="results">
+          <div class="row small">
+            <div>Found: <span id="foundCount">0</span> (showing <span id="showingCount">0</span> max 100)</div>
+          </div>
+          <div id="resultList" class="list" aria-live="polite"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
   <script>
-    // Security: no innerHTML for untrusted data; strict CSP; separate SW file.
+    // ---- App config
+    const DEFAULT_CFG = { letters:"aąbcćdeęfghijklłmnńoóprsśtuwyzźż", locale:"pl-PL" };
+    const DICT_ROOT = new URL('res/dict/pl_PL/', location.href).toString(); // manifest.json under here
 
-    const DEFAULT_CFG = {
-      letters: "aąbcćdeęfghijklłmnńoóprsśtuwyzźż",
-      locale: "pl-PL"
-    };
-
+    // ---- DOM
     const $text = document.getElementById('text');
     const $grid = document.getElementById('grid');
     const $tot  = document.getElementById('lettersTotal');
@@ -87,122 +138,195 @@
     const $remainOriginalCount = document.getElementById('remainOriginalCount');
     const $remainShuffledCount = document.getElementById('remainShuffledCount');
     const $reshuffleBtn = document.getElementById('reshuffleBtn');
+    const $openFinder = document.getElementById('openFinder');
 
+    // Drawer
+    const $drawer = document.getElementById('drawer');
+    const $drawerBackdrop = document.getElementById('drawerBackdrop');
+    const $drawerClose = document.getElementById('drawerClose');
+    const $lettersInput = document.getElementById('lettersInput');
+    const $shuffleToggle = document.getElementById('shuffleToggle');
+    const $goBtn = document.getElementById('goBtn');
+    const $status = document.getElementById('status');
+    const $foundCount = document.getElementById('foundCount');
+    const $showingCount = document.getElementById('showingCount');
+    const $resultList = document.getElementById('resultList');
+
+    // ---- State
     let letters = Array.from(DEFAULT_CFG.letters);
     let shuffledLetters = [];
     let locale  = DEFAULT_CFG.locale;
+    let posMap = new Map(letters.map((ch,i)=>[ch,i])); // letter -> index
 
-    // Auto-grow textarea height with content
-    function autoGrow() { $text.style.height='auto'; $text.style.height=$text.scrollHeight+'px'; }
+    // Auto-grow textarea
+    function autoGrow(){ $text.style.height='auto'; $text.style.height=$text.scrollHeight+'px'; }
 
-    function sanitizeLetters(raw) {
-      const seen = new Set();
-      const out = [];
-      for (const cp of Array.from(String(raw).replace(/\s+/g,''))) {
-        if (!seen.has(cp)) { seen.add(cp); out.push(cp); }
-      }
-      return out.length ? out : Array.from(DEFAULT_CFG.letters);
+    // Sanitize alphabet
+    function sanitizeLetters(raw){
+      const seen=new Set(), out=[];
+      for(const cp of Array.from(String(raw).replace(/\s+/g,''))) if(!seen.has(cp)){ seen.add(cp); out.push(cp); }
+      return out.length?out:Array.from(DEFAULT_CFG.letters);
     }
 
-    function shuffle(arr) {
-      const a = arr.slice();
-      for (let i=a.length-1;i>0;i--) {
-        const j = Math.floor(Math.random()*(i+1));
-        [a[i],a[j]]=[a[j],a[i]];
+    function shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+    // Build per-letter grid
+    function buildGrid(){
+      $grid.textContent='';
+      for(const ch of letters){
+        const cell=document.createElement('div'); cell.className='cell'; cell.setAttribute('role','group'); cell.setAttribute('aria-label',`Letter ${ch}`); cell.dataset.letter=ch;
+        const l=document.createElement('div'); l.className='ltr'; l.textContent=ch;
+        const c=document.createElement('div'); c.className='cnt zero'; c.setAttribute('data-count',''); c.textContent='0';
+        cell.append(l,c); $grid.appendChild(cell);
       }
-      return a;
+      $alphaSize.textContent=String(letters.length);
+      posMap = new Map(letters.map((ch,i)=>[ch,i]));
+      shuffledLetters=shuffle(letters);
+      updateCounts();
     }
 
-    function buildGrid() {
-      $grid.textContent = '';
-      for (const ch of letters) {
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        cell.setAttribute('role','group');
-        cell.setAttribute('aria-label', `Letter ${ch}`);
-        cell.dataset.letter = ch;
+    // Update counts + remaining strings
+    function updateCounts(){
+      const txt=($text.value||'').toLocaleLowerCase(locale);
+      const totalLetters=(txt.match(/\p{L}/gu)||[]).length; $tot.textContent=String(totalLetters);
+      const freq=Object.fromEntries(letters.map(l=>[l,0]));
+      for(const ch of txt) if(Object.prototype.hasOwnProperty.call(freq,ch)) freq[ch]++;
 
-        const l = document.createElement('div');
-        l.className = 'ltr';
-        l.textContent = ch;
-
-        const c = document.createElement('div');
-        c.className = 'cnt zero';
-        c.setAttribute('data-count','');
-        c.textContent = '0';
-
-        cell.append(l, c);
-        $grid.appendChild(cell);
-      }
-      $alphaSize.textContent = String(letters.length);
-      shuffledLetters = shuffle(letters); // initial shuffle on load
-      updateCounts(); // initial paint, also updates remaining counters
-    }
-
-    function updateCounts() {
-      const txt = ($text.value || '').toLocaleLowerCase(locale);
-      const totalLetters = (txt.match(/\p{L}/gu) || []).length;
-      $tot.textContent = String(totalLetters);
-
-      const freq = Object.fromEntries(letters.map(l => [l, 0]));
-      for (const ch of txt) if (Object.prototype.hasOwnProperty.call(freq, ch)) freq[ch]++;
-
-      // Update per-letter grid
-      for (const cell of $grid.children) {
-        const ltr = cell.dataset.letter;
-        const n = freq[ltr] ?? 0;
-        const c = cell.querySelector('[data-count]');
-        c.textContent = String(n);
-        c.classList.remove('zero','one','many');
-        c.classList.add(n===0?'zero':n===1?'one':'many');
-        cell.title = `${ltr}: ${n}`;
+      for(const cell of $grid.children){
+        const ltr=cell.dataset.letter, n=freq[ltr]??0, c=cell.querySelector('[data-count]');
+        c.textContent=String(n); c.classList.remove('zero','one','many'); c.classList.add(n===0?'zero':n===1?'one':'many'); cell.title=`${ltr}: ${n}`;
       }
 
-      // Dynamic remaining strings + their counts
-      const remainingOriginal = letters.filter(l => (freq[l]||0)===0).join('');
-      const remainingShuf = shuffledLetters.filter(l => (freq[l]||0)===0).join('');
-
-      $remainOriginal.textContent = remainingOriginal;
-      $remainShuffled.textContent = remainingShuf;
-      $remainOriginalCount.textContent = String(remainingOriginal.length);
-      $remainShuffledCount.textContent = String(remainingShuf.length);
+      const remainingOriginal=letters.filter(l=>(freq[l]||0)===0).join('');
+      const remainingShuf=shuffledLetters.filter(l=>(freq[l]||0)===0).join('');
+      $remainOriginal.textContent=remainingOriginal; $remainShuffled.textContent=remainingShuf;
+      $remainOriginalCount.textContent=String(remainingOriginal.length); $remainShuffledCount.textContent=String(remainingShuf.length);
     }
 
-    async function loadConfig() {
-      try {
-        const res = await fetch('config.json', { cache: 'no-store' });
-        if (!res.ok) throw new Error('bad status');
-        const cfg = await res.json();
-        letters = sanitizeLetters(cfg.letters ?? DEFAULT_CFG.letters);
-        locale  = String(cfg.locale || DEFAULT_CFG.locale);
-      } catch {
-        letters = sanitizeLetters(DEFAULT_CFG.letters);
-        locale  = DEFAULT_CFG.locale;
-      } finally {
-        buildGrid();
+    // Config
+    async function loadConfig(){
+      try{
+        const res=await fetch('config.json',{cache:'no-store'}); if(!res.ok) throw new Error('bad status');
+        const cfg=await res.json();
+        letters=sanitizeLetters(cfg.letters??DEFAULT_CFG.letters);
+        locale=String(cfg.locale||DEFAULT_CFG.locale);
+      }catch{
+        letters=sanitizeLetters(DEFAULT_CFG.letters);
+        locale=DEFAULT_CFG.locale;
+      }finally{ buildGrid(); }
+    }
+
+    // Drawer controls
+    function openDrawer(){
+      $drawer.classList.add('open'); $drawer.setAttribute('aria-hidden','false');
+      // Prefill text field with shuffled missing letters
+      $lettersInput.value = ($remainShuffled.textContent || '');
+      $lettersInput.focus();
+    }
+    function closeDrawer(){ $drawer.classList.remove('open'); $drawer.setAttribute('aria-hidden','true'); }
+
+    // Masks using BigInt
+    function maskFromString(s){
+      let m=0n;
+      const txt = (s||'').toLocaleLowerCase(locale);
+      for(const ch of txt){
+        const idx=posMap.get(ch);
+        if(idx!==undefined) m |= (1n<<BigInt(idx));
       }
+      return m;
+    }
+    function isSubset(mask, allowed){ return (mask & (~allowed))===0n; } // BigInt subset
+    function popcountBig(n){ let c=0n; while(n){ n&=n-1n; c++; } return Number(c); }
+
+    // Dictionary I/O
+    async function fetchJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error('fetch '+url); return r.json(); }
+    async function* streamNDJSON(url){
+      const res=await fetch(url,{cache:'no-store'}); if(!res.ok) throw new Error('fetch '+url);
+      const reader=res.body.getReader(); const td=new TextDecoder(); let buf='';
+      while(true){
+        const {value,done}=await reader.read(); if(done) break;
+        buf += td.decode(value,{stream:true});
+        let idx;
+        while((idx=buf.indexOf('\n'))>=0){
+          const line=buf.slice(0,idx).trim(); buf=buf.slice(idx+1);
+          if(line) yield JSON.parse(line);
+        }
+      }
+      if(buf.trim()) yield JSON.parse(buf.trim());
     }
 
-    // Wire events once
-    $text.addEventListener('input', () => { autoGrow(); updateCounts(); });
-    if ($reshuffleBtn) {
-      $reshuffleBtn.addEventListener('click', () => {
-        shuffledLetters = shuffle(letters); // reshuffle source alphabet
-        updateCounts(); // repaint remaining + counts
-      });
+    async function runSearch(){
+      $status.textContent='Searching…'; $foundCount.textContent='0'; $showingCount.textContent='0'; $resultList.textContent='';
+
+      // Load manifest
+      const manifest = await fetchJSON(new URL('manifest.json', DICT_ROOT));
+      const filesMap = manifest.files || {};
+      const selectedMask = maskFromString($lettersInput.value);
+      if(selectedMask===0n){ $status.textContent='Provide some letters'; return; }
+
+      const mode = (document.querySelector('input[name="mode"]:checked')?.value)||'exact'; // default exact
+      const targetPop = popcountBig(selectedMask);
+      const shuffleMode = $shuffleToggle.checked;
+
+      // Pick shards
+      const shardKeys = Object.keys(filesMap).map(k=>Number(k)).sort((a,b)=>a-b)
+        .filter(k => mode==='exact' ? (k===targetPop) : (k<=targetPop && k>0));
+
+      let found=0; const limit=100; const keep=[];
+      function pushWord(word){
+        if(shuffleMode){
+          if(keep.length<limit){ keep.push(word); }
+          else{
+            const r=Math.floor(Math.random()*(found));
+            if(r<limit) keep[r]=word;
+          }
+        }else{
+          if(keep.length<limit) keep.push(word);
+        }
+      }
+
+      for(const k of shardKeys){
+        const url = new URL(filesMap[String(k)], location.href).toString();
+        for await (const row of streamNDJSON(url)){
+          // row format: [maskNumber, "word"]
+          const m = BigInt(row[0]);
+          const w = row[1];
+          const ok = (mode==='exact') ? (m===selectedMask) : isSubset(m, selectedMask);
+          if(ok){
+            found++;
+            pushWord(w);
+            if(found%200===0){ $foundCount.textContent=String(found); }
+          }
+        }
+      }
+
+      // Render results
+      $foundCount.textContent=String(found);
+      $showingCount.textContent=String(keep.length);
+      const frag=document.createDocumentFragment();
+      if(!shuffleMode){ keep.sort((a,b)=>a.localeCompare(b, locale)); }
+      for(const w of keep){
+        const div=document.createElement('div'); div.className='word'; div.textContent=w;
+        frag.appendChild(div);
+      }
+      $resultList.appendChild(frag);
+      $status.textContent = found? 'Done' : 'No matches';
     }
+
+    // Events
+    $text.addEventListener('input', ()=>{ autoGrow(); updateCounts(); });
+    $reshuffleBtn.addEventListener('click', ()=>{ shuffledLetters=shuffle(letters); updateCounts(); });
+    $openFinder.addEventListener('click', openDrawer);
+    $drawerBackdrop.addEventListener('click', closeDrawer);
+    $drawerClose.addEventListener('click', closeDrawer);
+    $goBtn.addEventListener('click', runSearch);
 
     // Init
     loadConfig();
-    // First autosize
     window.addEventListener('load', autoGrow);
 
     // SW
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(()=>{});
-      });
-    }
+    if('serviceWorker' in navigator){ window.addEventListener('load', ()=>{ navigator.serviceWorker.register('./sw.js').catch(()=>{}); }); }
   </script>
 </body>
 </html>

@@ -1,11 +1,12 @@
+// sw.js
 /* Offline support with cache versioning and safe defaults */
-const CACHE_VER = 'pangram-aid-v4';
+const CACHE_VER = 'pangram-aid-v6';
 const CORE_ASSETS = ['/', './', './index.html', './config.json', './sw.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
     const c = await caches.open(CACHE_VER);
-    await c.addAll(CORE_ASSETS);
+    try { await c.addAll(CORE_ASSETS); } catch(_) {}
     await self.skipWaiting();
   })());
 });
@@ -21,12 +22,12 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const { request } = e;
   const url = new URL(request.url);
-
-  // Only handle same-origin requests to avoid caching 3rd-party unintentionally
   if (url.origin !== location.origin) return;
 
-  // Network-first for config.json to avoid stale alphabet/locale
-  if (url.pathname.endsWith('/config.json')) {
+  const isConfig = url.pathname.endsWith('/config.json');
+  const isDict = url.pathname.includes('/res/dict/');
+
+  if (isConfig || isDict) {
     e.respondWith((async () => {
       try {
         const fresh = await fetch(request, { cache: 'no-store' });
@@ -35,30 +36,32 @@ self.addEventListener('fetch', (e) => {
         return fresh;
       } catch {
         const cached = await caches.match(request);
-        return cached || new Response('{"letters":"","locale":"pl-PL"}', {
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
+        if (cached) return cached;
+        if (isConfig) {
+          return new Response('{"letters":"","locale":"pl-PL"}', { headers: { 'Content-Type': 'application/json; charset=utf-8' }});
+        }
+        return new Response('/* offline */', { status: 503, statusText: 'Offline' });
       }
     })());
     return;
   }
 
-  // Cache-first for everything else (HTML, SW, assets)
-  e.respondWith((async () => {
-    const cached = await caches.match(request, { ignoreSearch: true });
-    if (cached) return cached;
-    try {
-      const net = await fetch(request);
-      const cache = await caches.open(CACHE_VER);
-      if (request.method === 'GET') cache.put(request, net.clone());
-      return net;
-    } catch {
-      // Fallback to cached root for navigation requests
-      if (request.mode === 'navigate') {
-        const offline = await caches.match('./index.html');
-        if (offline) return offline;
+  if (request.method === 'GET') {
+    e.respondWith((async () => {
+      const cached = await caches.match(request, { ignoreSearch: true });
+      if (cached) return cached;
+      try {
+        const net = await fetch(request);
+        const cache = await caches.open(CACHE_VER);
+        cache.put(request, net.clone());
+        return net;
+      } catch {
+        if (request.mode === 'navigate') {
+          const offline = await caches.match('./index.html');
+          if (offline) return offline;
+        }
+        return new Response('Offline', { status: 503, statusText: 'Offline' });
       }
-      return new Response('Offline', { status: 503, statusText: 'Offline' });
-    }
-  })());
+    })());
+  }
 });
